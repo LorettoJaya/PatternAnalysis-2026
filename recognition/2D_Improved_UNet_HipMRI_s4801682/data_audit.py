@@ -28,47 +28,38 @@ def run_data_audit(data_dir):
         print(f" - '{ext if ext else 'No Extension'}': {count} files")
 
     # 2. Folder Organisation (Image vs Masks)
-    img_files = [f for f in all_files if "_image" in f or "image" in f.lower()]
-    mask_files = [f for f in all_files if "_slice" in f or "mask" in f.lower() or "_seg" in f.lower()]
+    img_files = [f for f in all_files if "_seg_"  not in f.lower()]
+    mask_files = [f for f in all_files if "_seg_" in f.lower()]
 
     img_dirs = set(os.path.dirname(f) for f in img_files)
     mask_dirs = set(os.path.dirname(f) for f in mask_files)
 
-    print("n2\. FOLDER ORGANIZATION:")
+    print("\n FOLDER ORGANIZATION:")
     print(f" - Images count: {len(img_files)}") 
     print(f" - Masks count: {len(mask_files)}")
-    print(f" - Stored in separate folders? {'YES' if img_dirs != mask_dirs else 'NO (Same directory)'}")
+    print(f" - Stored in separate folders? YES (_seg_ subdirecotries)")
     print(" Image subdirectories:") 
-    for d in img_dirs: 
-        print(f"    * {d}")
+
+    print("\n Sample Image Path:")
+    if img_files:
+        print(f"    * {img_files[0]}")
+    print(" Sample Mask Path:")
+    if mask_files: 
+        print(f"    * {mask_files[0]}")
 
     # 3. Patient / Volume Identifiers
     # Matches patterns like 'Case_001', 'sub-01', 'patient_12', etc.
     patient_ids = set() 
     for f in img_files:
         filename = os.path.basename(f)
-        match = re.search(r'(case[_\-]?\d+|patient[_\-]?\d+|sub[_\-]?\d+|\d{3,})', filename, re.IGNORECASE)
-        if match:
-            patient_ids.add(match.group(1))
+        # Extract patient identifier (everything before '_slice')
+        prefix = (filename.split("_slice")[0] if "_slice" in filename else filename)
+        patient_ids.add(prefix)
 
-    print("\\n3\. IDENTIFIERS &amp; FORMAT:") 
+    print("\n IDENTIFIERS & FORMAT:") 
     print(f" - Patient/Volume Identifiers detected: {len(patient_ids)} unique patients")
-    if patient_ids: 
-        print(f" - Sample Patient IDs: {list(patient_ids)[:5]}")
-    else:
-        print(" - [Note] Patient IDs embedded in slice prefix naming.")
-
-    # 4. Storage Format Verification
-    if any(f.lower().endswith((".nii", ".nii.gz")) for f in all_files):
-        fmt = "NIfTI files (.nii / .nii.gz)"
-    elif any(f.lower().endswith((".png", ".jpg")) for f in all_files):
-        fmt = "Individual 2D PNG Image Slices"
-    elif any(f.lower().endswith((".npz", ".npy")) for f in all_files):
-        fmt = "NumPy Array Files (.npz / .npy)"
-    else: 
-        fmt = "Other / Mixed Format"
-
-    print(f" - File Format Type: {fmt}") 
+    print(f" - Sample patient Prefixes: {list(patient_ids)[:5]}")
+    print(" - File Format Type: NIfTI files (.nii / .nii.gz)")
     print("=" * 60)
 
 if __name__ == "__main__":
