@@ -29,7 +29,7 @@ def run_data_audit(data_dir):
     # 1. Total File Count & Extensions
     # Find all files
     all_files = sorted(
-        path for path in data_dir.rblob("*")
+        path for path in data_dir.rglob("*")
         if path.is_file()
     )
 
