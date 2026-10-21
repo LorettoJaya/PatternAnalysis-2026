@@ -1,5 +1,6 @@
 from pathlib import Path 
 import re 
+import torch
 import numpy as np 
 import matplotlib.pyplot as plt 
 import nibabel as nib
@@ -14,6 +15,9 @@ check the existing splits: check is the current folder organisation seperates ca
 save a visual example: create an image showing an MRI slice with its mask overlay, so you can manually inspect it. 
 """
 
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 DATA_DIR = Path("/home/groups/comp3710/HipMRI_Study_open/keras_slices_data")
 
 # Regex pattern matching case_XXX_week_Y_slice_Z.nii.gz and seg_XXX_week_y_slice_z.nii.gz
@@ -22,10 +26,10 @@ IMAGE_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# MASK_PATTERN = re.compile(
-#     r"^seg_(\d+)_week_(\d+)_slice_(\d+)\.nii\.gz$",
-#     re.IGNORECASE
-# )
+MASK_PATTERN = re.compile(
+    r"^seg_(\d+)_week_(\d+)_slice_(\d+)\.nii\.gz$",
+    re.IGNORECASE
+)
 
 # APPENDIX B LISTING 1: course standard NIfTI loading functions
 def to_channels(arr: np.ndarray, dtype=np.uint8) -> np.ndarray:
@@ -98,7 +102,11 @@ def load_data_2D(imageNames, normImage=False, categorical=False, dtype=np.float3
 
 #1. Verify Image and Mask Alignment:
 def verify_alignment(data_dir: Path):
-    print("\n1. Verifying Image & Mask Alignment...")
+    """ Load a simaple image and its mask.
+        Compare their dimensions.
+        Display the MRI, segmentation mask, and overlay for visual inspection.
+    """
+    print("\n1. VERIFYING IMAGE & MASK ALIGNMENT")
 
     # Load sample image slices from training folder
     img_dir = data_dir / "keras_slices_train"
@@ -127,6 +135,15 @@ def verify_alignment(data_dir: Path):
     sample_mask_name = (f"seg_{case_id}_week_{week_id}_slice_{slice_id}.nii.gz")
     sample_mask_path = mask_dir / sample_mask_name
 
+    # Checking is the matching file exists:
+    if not mask_dir.is_dir():
+        raise FileNotFoundError(f"Mask directory not found: {mask_dir}")
+
+    if not sample_mask_path.is_file():
+        raise FileNotFoundError(
+            f"Matching mask not found: {sample_mask_path}"
+        )
+    
     # Load image and mask using the course standard loader
     raw_img = load_data_2D([sample_img_path], normImage=False)
     norm_img = load_data_2D([sample_img_path], normImage=True)
@@ -171,5 +188,230 @@ def verify_alignment(data_dir: Path):
     plt.close(fig)
     print("     Saved visual alignment overlay plot to 'alignment_check.png'")
 
+# Check every image has a matching mask in the same split folder. 
+def verify_image_mask_pairs(data_dir: Path):
+    """ check every image has a matching mask i the same split.
+        Find images with missing masks.
+        Find masks with no matching image.
+        Detect duplicate image or mask identifiers.
+        Check whether image/mask identifiers occur 
+        in the wrong split or across multiple splits.
+    """
+    split_folders = {
+        "train": (
+            data_dir / "keras_slices_train", 
+            data_dir / "keras_slices_seg_train" 
+        ),
+        "validation": (
+            data_dir / "keras_slices_validate",
+            data_dir / "keras_slices_seg_validate"
+        ),
+        "test": (
+            data_dir / "keras_slices_test",
+            data_dir / "keras_slices_seg_test"
+        )
+    }
+
+    # Track where each slice identifier occurs across splits.
+    image_loc = {}
+    mask_loc = {}
+    errors_found = False
+
+    for split, (img_dir, mask_dir) in split_folders.items():
+        print(f"\n{split.upper()}")
+
+        if not img_dir.is_dir() or not mask_dir.is_dir():
+            print("ERROR: Image or mask folder is missing.")
+            errors_found = True
+            continue
+
+        images = {}
+        masks = {}
+
+        # Read image filenames and detect duplicate identifiers.
+        for path in img_dir.glob("case_*.nii.gz"):
+            match = IMAGE_PATTERN.fullmatch(path.name)
+
+            if match:
+                key = match.groups()
+
+                if key in images:
+                    print(f"Duplicate image identifier: {key}")
+                    errors_found = True
+                else:
+                    images[key] = path
+
+                image_loc.setdefault(key, []).append(split)
+
+        # Read mask filenames and detect duplicate identifiers.
+        for path in mask_dir.glob("seg_*.nii.gz"):
+            match = MASK_PATTERN.fullmatch(path.name)
+
+            if match:
+                key = match.groups()
+
+                if key in masks:
+                    print(f"Duplicate mask identifier: {key}")
+                    errors_found = True
+                else:
+                    masks[key] = path
+
+                mask_loc.setdefault(key, []).append(split)
+
+        image_keys = set(images)
+        mask_keys = set(masks)
+
+        missing_masks = image_keys - mask_keys
+        unmatched_masks = mask_keys - image_keys
+
+        print(f"Images found: {len(images)}")
+        print(f"Masks found: {len(masks)}")
+        print(f"Images without masks: {len(missing_masks)}")
+        print(f"Masks without images: {len(unmatched_masks)}")
+
+        for key in sorted(missing_masks)[:10]:
+            print(f"  Missing mask for image: {images[key].name}")
+
+        for key in sorted(unmatched_masks)[:10]:
+            print(f"  Missing image for mask: {masks[key].name}")
+
+        if missing_masks or unmatched_masks:
+            errors_found = True
+
+    # Check whether the same slice identifier occurs in
+    # multiple image splits or multiple mask splits.
+    for label, locations in [
+        ("image", image_loc),
+        ("mask", mask_loc)
+    ]:
+        for key, splits in locations.items():
+            if len(splits) > 1:
+                print(
+                    f"Duplicate {label} identifier across splits: "
+                    f"{key}, found in {splits}"
+                )
+                errors_found = True
+
+     # Check whether an image and its matching mask are
+    # assigned to the same split.
+    for key in set(image_loc) & set(mask_loc):
+        image_splits = set(image_loc[key])
+        mask_splits = set(mask_loc[key])
+
+        if image_splits != mask_splits:
+            print(
+                f"Image-mask split mismatch for {key}: "
+                f"images in {sorted(image_splits)}, "
+                f"masks in {sorted(mask_splits)}"
+            )
+            errors_found = True
+
+    print("\nIMAGE-MASK PAIRING RESULT")
+
+    if errors_found:
+        print("WARNING: Issues were found. Review the messages above.")
+    else:
+        print("PASSED: No pairing or duplicate-identifier issues found.")
+
+# Confirm Whether existing splits are seperated by case ID
+def confirm_patient_split(data_dir: Path):
+    """ Scan the 3 image folders.
+        Extract unique case IDs.
+        Report the number of cases in each split.
+        Check for case IDs appearing in multiple splits.
+        Report whether any overlap was found.
+    """
+    print("\n2. EXISTING SPLIT AND CASE-ID AUDIT")
+
+    split_folders = {
+        "train": data_dir / "keras_slices_train", 
+        "validation": data_dir / "keras_slices_validate",
+        "test": data_dir / "keras_slices_test",
+    }
+
+    case_ids_by_split = {}
+    slice_counts = {}
+
+    for split, folder in split_folders.items():
+        if not folder.is_dir():
+            print(f"\nWARNING: Folder not found: {folder}")
+            case_ids_by_split[split] = set()
+            slice_counts[split] = 0
+            continue
+
+        case_ids = set()
+        slice_count = 0
+
+        for path in folder.glob("case_*.nii.gz"):
+            match = IMAGE_PATTERN.fullmatch(path.name)
+
+            if match:
+                case_id = match.group(1)
+                case_ids.add(case_id)
+                slice_count += 1
+
+        case_ids_by_split[split] = case_ids
+        slice_counts[split] = slice_count
+
+        print(f"\n{split.upper()}")
+        print(f"    Image slices: {slice_count}")
+        print(f"    Unique case IDs: {len(case_ids)}")
+
+    # Count unique cases across all existing splits
+    all_case_ids = set().union(*case_ids_by_split.values())
+    total_cases = len(all_case_ids)
+
+    print("\nEXISTING SPLIT DISTIBUTION")
+    print(f"Total unique case IDs: {total_cases}")
+
+    if total_cases > 0:
+        for split, case_ids in case_ids_by_split.items():
+            percentage = 100 * len(case_ids) / total_cases
+            print(
+                f"  {split}: {len(case_ids)} cases"
+                f"({percentage:.1f}%)"
+            )
+
+    # Check for case IDs shared between splits.
+    print("\nCROSS-SPLIT CASE-ID OVERLAP")
+    overlap_found = False
+
+    split_names = list(split_folders.keys())
+
+    for i in range(len(split_names)):
+        for j in range(i + 1, len(split_names)):
+            split_a = split_names[i]
+            split_b = split_names[j]
+
+            overlap = (
+                case_ids_by_split[split_a]
+                & case_ids_by_split[split_b]
+            )
+
+            print(
+                f"{split_a} vs {split_b}: "
+                f"{len(overlap)} overlapping case IDs"
+            )
+
+            if overlap:
+                overlap_found = True
+                print(f"    IDs: {sorted(overlap)}")
+
+    if total_cases == 0:
+        print("\nWARNING: No valid case IDs found. Check the folders and filenames.")
+    elif any(not case_ids_by_split[name] for name in split_names):
+        print("\nWARNING: At least one split is empty or missing.")
+    elif overlap_found:
+        print("\nWARNING: Investigate overlapping case IDs before training.")
+    else:
+        print("\nNo case-ID overlap found between the existing splits.")
+
+    print(
+        "\nIMPORTANT: This checks case-ID separation, not patient "
+        "identity. Confirm that each case ID represents one patient."
+    )
+
 if __name__ == "__main__":
     verify_alignment(DATA_DIR)
+    verify_image_mask_pairs(DATA_DIR)
+    confirm_patient_split(DATA_DIR)
