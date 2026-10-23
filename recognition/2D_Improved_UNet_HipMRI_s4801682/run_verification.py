@@ -1,6 +1,8 @@
 from pathlib import Path 
 import re 
+import time
 import torch
+import torch.nn as nn
 import numpy as np 
 import matplotlib.pyplot as plt 
 import nibabel as nib
@@ -187,6 +189,50 @@ def verify_alignment(data_dir: Path):
     plt.savefig("alignment_check.png")
     plt.close(fig)
     print("     Saved visual alignment overlay plot to 'alignment_check.png'")
+
+def verify_multiple_pairs(data_dir: Path, num_samples=5):
+    """Visually inspect several MRI and mask pairs."""
+
+    print(f"\\nINSPECTING {num_samples} IMAGE-MASK PAIRS...")
+
+    img_dir = data_dir / "keras_slices_train"
+    mask_dir = data_dir / "keras_slices_seg_train"
+
+    # Pick evenly spaced slices across the dataset 
+    all_imgs = sorted(list(img_dir.glob("case_*.nii.gz")))
+    step = max(1, len(all_imgs) // num_samples) 
+    selected_imgs = [all_imgs[i] for i in range(0, len(all_imgs), step)][ :num_samples ]
+
+    fig, axes = plt.subplots(num_samples, 3, figsize=(15, 4 * num_samples))
+
+    for row, img_path in enumerate(selected_imgs):
+        match = IMAGE_PATTERN.match(img_path.name)
+        case_id, week_id, slice_id = match.groups()
+        mask_path = mask_dir / f"seg_{case_id}_week_{week_id}_slice_{slice_id}.nii.gz"
+
+        img_data = load_data_2D([img_path], normImage=True)[0]
+        mask_data = load_data_2D([mask_path], categorical=False)[0]
+
+        # Column 0: MRI Slice 
+        axes[row, 0].imshow(img_data, cmap="gray") 
+        axes[row, 0].set_title(f"MRI: {img_path.name}", fontsize=10)
+
+        # Column 1: Segmentation Mask 
+        axes[row, 1].imshow(mask_data, cmap="gray") 
+        axes[row, 1].set_title(f"Mask (Labels: {np.unique(mask_data)})", fontsize=10)
+
+        # Column 2: Color Overlay 
+        axes[row, 2].imshow(img_data, cmap="gray") 
+        axes[row, 2].imshow( np.ma.masked_where(mask_data == 0, mask_data), cmap="jet", alpha=0.5) 
+        axes[row, 2].set_title("Overlay Alignment Check", fontsize=10)
+
+        for col in range(3): 
+            axes[row, col].axis("off")
+
+    plt.tight_layout() 
+    plt.savefig("sample_gallery_check.png", dpi=150) 
+    plt.close(fig) 
+    print(f"Saved {num_samples} sample slice overlays to 'sample_gallery_check.png'" )
 
 # Check every image has a matching mask in the same split folder. 
 def verify_image_mask_pairs(data_dir: Path):
@@ -415,3 +461,4 @@ if __name__ == "__main__":
     verify_alignment(DATA_DIR)
     verify_image_mask_pairs(DATA_DIR)
     confirm_patient_split(DATA_DIR)
+    verify_multiple_pairs(DATA_DIR, num_samples=5)
