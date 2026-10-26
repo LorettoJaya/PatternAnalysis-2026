@@ -68,7 +68,7 @@ class HipMRIDataset(Dataset):
         img_data = img_nii.get_fdata(caching="unchanged")
         mask_data = mask_nii.get_fdata(caching="unchanged")
 
-        # Ensure 2D spatial dimensions (256, 128)
+        # Ensure the image and mask are 2D spatial dimensions (256, 128)
         if img_data.ndim == 3 and img_data.shape[-1] == 1:
             img_data = img_data[:, :, 0]
 
@@ -78,9 +78,11 @@ class HipMRIDataset(Dataset):
         if img_data.ndim != 2 or mask_data.ndim != 2:
             raise ValueError("Expected 2D MRI images and masks.")
 
+        # Check that the image and mask are spatially compatible
         if img_data.shape != mask_data.shape:
             raise ValueError("Image and mask shapes do not match.")
 
+        # Validate image and mask values
         if not np.all(np.isfinite(img_data)):
             raise ValueError("MRI image contains non-finite values.")
 
@@ -101,16 +103,35 @@ class HipMRIDataset(Dataset):
         img_std = img_data.std()
         img_data = (img_data - img_mean) / (img_std + 1e-8)
 
-        # Convert to PyTorch Tensors
-        # Image: (C, H, W) = (1, 256, 128) as float32
+        # Convert the image and mask to PyTorch Tensors
+        # Image shape: (C, H, W) = (1, 256, 128)
         # C = channels. The num. of color or modality feature maps. 
         # MRI scan is single-modulity greyscale slice, so it only has C=1 channel.
         # H = Height. The vertical spatial resolution (num. of rows of pixels). In dataset, H = 256
         # W = width. The horizontal spatial resolution (num. of columns of pixels). In dataset, W = 128
         img_tensor = torch.from_numpy(img_data).unsqueeze(0)
-        # Mask: (H, W) = (256, 128) as int64 for cross-entropy and indexing
-        mask_tensor = torch.from_numpy(np.round(mask_data).astype(np.int64))
+        # Mask shape: (H, W), with integer class labels
+        mask_tensor = torch.from_numpy(mask_data.copy()).long()
 
+        # Standardise spatial dimensions to (256, 128) 
+        # MRI images use bilinear interpolation. 
+        # Masks use nearest-neighbour interpolation to preserve labels.
+        target_size = (256, 128)
+
+        if img_tensor.shape[-2:] != target_size:
+            img_tensor = TF.resize(
+                img_tensor,
+                list(target_size),
+                interpolation=TF.InterpolationMode.BILINEAR,
+                antialias=True
+            )
+
+            mask_tensor = TF.resize(
+                mask_tensor.unsqueeze(0),
+                list(target_size),
+                interpolation=TF.InterpolationMode.NEAREST
+            ).squeeze(0).long()
+        
         # Synchronised Data Augmentation (applied only during Training)
         if self.is_train:
             # Random Horizontal flip (p=0.5)
@@ -133,7 +154,20 @@ class HipMRIDataset(Dataset):
                     angle, 
                     interpolation=TF.InterpolationMode.NEAREST,
                     fill=0
-                ).squeeze(0)
+                ).squeeze(0).long()
+
+        # Final shape checks:
+        if img_tensor.shape != (1, 256, 128):
+            raise ValueError(
+                f"Unexpected image tensor shape {tuple(img_tensor.shape)}"
+                f"for {img_path.name}"
+            )
+
+        if mask_tensor.shape != (256, 128):
+            raise ValueError(
+                f"Unexpected mask tensor shape {tuple(mask_tensor.shape)}"
+                f"for {mask_path.name}"
+            )
 
         # Return 1 image and its corresponding mask
         return img_tensor, mask_tensor
