@@ -23,6 +23,51 @@ class ConvBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
 
+class ResidualBlock(nn.Module):
+    """ Residual Convolution block.
+
+        Main Path:
+            [Conv2d (3x3) -> BatchNorm -> ReLU] x2
+            (the second ReLU is applied after adding the shortcut)
+
+        Shortcut path:
+            Identity if the number of input and output channels matches.
+            Otherwise, use a 1x1 convolution to match the channels.
+    """
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        # Main convolution path: extract features using 2 convolutions
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.relu = nn.ReLU(inplace=True)
+
+        # Shortcut path: match channels if necessary
+        if in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        # Save or transform the input for the residual shortcut
+        identity = self.shortcut(x)
+
+        # Main path
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+
+        # Combine the convolution features with the shortcut.
+        out = out + identity
+        out = self.relu(out)
+
+        return out
+
 class Baseline_UNet(nn.Module):
     """Standard 2D U-Net Baseline Model Architecture.
        Configured for 6-class pelvic MRI segmentation.
@@ -118,9 +163,79 @@ class Baseline_UNet(nn.Module):
         logits = self.output_layer(d1) # (B, 6, 256, 128) 
         return logits
 
+class Improved_UNet(nn.Module):
+    """2D Improved U-Net Architecture.
+       Replaces standard double-convolution blocks with ResidualBlocks
+       (residual shortcut connections) to evaluate whether residual 
+       learning improves gradient propagation and prostate boundary segmentation.
+    """
+    def __init__(self, in_channels=1, num_classes=6, base_filters=16):
+        super().__init__()
+
+        # Encoder (Contracting Path): extract features at progressively smaller resolutions
+        self.enc1 = ResidualBlock(in_channels, base_filters)
+        self.enc2 = ResidualBlock(base_filters, base_filters * 2)
+        self.enc3 = ResidualBlock(base_filters * 2, base_filters * 4)
+        self.enc4 = ResidualBlock(base_filters * 4, base_filters * 8)
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # Bottleneck: deepest feature representation
+        self.bottleneck = ResidualBlock(base_filters * 8, base_filters * 16)
+
+        # Decoder: upsample and combine encoder features
+        self.up4 = nn.ConvTranspose2d(base_filters * 16, base_filters * 8, kernel_size=2, stride=2)
+        self.dec4 = ResidualBlock(base_filters * 16, base_filters * 8)
+
+        self.up3 = nn.ConvTranspose2d(base_filters * 8, base_filters * 4, kernel_size=2, stride=2)
+        self.dec3 = ResidualBlock(base_filters * 8, base_filters * 4)
+
+        self.up2 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2, kernel_size=2, stride=2)
+        self.dec2 = ResidualBlock(base_filters * 4, base_filters * 2)
+
+        self.up1 = nn.ConvTranspose2d(base_filters * 2, base_filters, kernel_size=2, stride=2)
+        self.dec1 = ResidualBlock(base_filters * 2, base_filters)
+
+        # Produce one output channel per segmentation class
+        self.output_layer = nn.Conv2d(base_filters, num_classes, kernel_size=1)
+
+    def forward(self, x):
+        # Encoder
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
+        e4 = self.enc4(self.pool(e3))
+        
+        # Bottleneck
+        b = self.bottleneck(self.pool(e4))
+
+        # Decoder stage 4
+        d4 = self.up4(b)
+        d4 = torch.cat([d4, e4], dim=1)
+        d4 = self.dec4(d4)
+
+        # Decoder stage 3
+        d3 = self.up3(d4)
+        d3 = torch.cat([d3, e3], dim=1)
+        d3 = self.dec3(d3)
+
+        # Decoder stage 2
+        d2 = self.up2(d3)
+        d2 = torch.cat([d2, e2], dim=1)
+        d2 = self.dec2(d2)
+
+        # Decoder stage 1
+        d1 = self.up1(d2)
+        d1 = torch.cat([d1, e1], dim=1)
+        d1 = self.dec1(d1)
+
+        # Return raw logits; the loss function handles these
+        logits = self.output_layer(d1)
+        return logits    
+
 if __name__ == "__main__":
     print("=" * 65)
-    print("RUNNING BASELINE 2D U-NET FORWARD PASS SANITY TEST")
+    print("RUNNING BASELINE & IMPROVED 2D U-NET FORWARD PASS SANITY TEST")
     print("=" * 65)
 
     device = torch.device(
@@ -132,22 +247,48 @@ if __name__ == "__main__":
     dummy_input = torch.randn(2, 1, 256, 128).to(device) 
     print(f"Dummy Input Tensor Shape: {tuple(dummy_input.shape)}")
 
-    model = Baseline_UNet(in_channels=1, num_classes=6, base_filters=16).to(device)
-
-    total_params = sum(
-        p.numel() for p in model.parameters() 
+    # Test Baseline UNet
+    b_model = Baseline_UNet(in_channels=1, num_classes=6, base_filters=16).to(device)
+    b_params = sum(
+        p.numel() for p in b_model.parameters() 
         if p.requires_grad
     ) 
-    print(f"Trainable Parameters: {total_params:,}")
 
-    output = model(dummy_input) 
-    print(f"Output Logits Shape: {tuple(output.shape)}")
+    # Disable gradient tracking because this is only a sanity test to check
+    # the output shape, not to train the model. This saves memory and avoids
+    # unnecessary gradient calculations (same is applied to Improved Unet shape verification)
+    with torch.no_grad():
+        b_output = b_model(dummy_input)
 
-    assert output.shape == (2, 6, 256, 128), (
+    assert b_output.shape == (2, 6, 256, 128), (
         f"Shape mismatch! Expected (2, 6, 256, 128), "
-        f"got {output.shape}"
+        f"got {b_output.shape}"
+    )
+
+    # Test Imporved UNet
+    i_model = Improved_UNet(in_channels=1, num_classes=6, base_filters=16).to(device)
+    i_params = sum(
+        p.numel() for p in i_model.parameters() 
+        if p.requires_grad
+    ) 
+
+    with torch.no_grad():
+        i_output = i_model(dummy_input) 
+
+    assert i_output.shape == (2, 6, 256, 128), (
+        f"Shape mismatch! Expected (2, 6, 256, 128), "
+        f"got {i_output.shape}"
+    )
+
+    print(
+        f"Baseline Trainable Parameters: {b_params:,} | Output Shape:"
+        f" {tuple(b_output.shape)}"
+    )
+    print(
+        f"Improved Trainable Parameters: {i_params:,} | Output Shape:"
+        f" {tuple(i_output.shape)}"
     )
 
     print("\n" + "=" * 65) 
-    print("SUCCESS: Baseline UNet passed shape verification!") 
+    print("SUCCESS: Baseline and Improved UNet passed shape verification!") 
     print("=" * 65)
