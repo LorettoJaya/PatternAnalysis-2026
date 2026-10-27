@@ -13,8 +13,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Import local dataset and model modules
 from dataset import get_dataloaders, NUM_CLASSES, TARGET_PROSTATE_LABEL
-from modules import Baseline_UNet
-
+from modules import Baseline_UNet, Improved_UNet
 
 # Configurations & Hyperparameters
 SEED = 42 
@@ -28,8 +27,17 @@ DICE_SMOOTH = 1e-5
 # Path configurations anchored to this file's directory
 PROJECT_DIR = Path(__file__).resolve().parent
 CHECKPOINT_DIR = PROJECT_DIR / "checkpoints"
-HISTORY_PATH = CHECKPOINT_DIR / "baseline_training_history.csv"
-BEST_MODEL_PATH = CHECKPOINT_DIR / "baseline_unet_best.pth"
+
+# Model selector: "baseline" or "improved"
+MODEL_NAME = "improved"
+
+if MODEL_NAME == "improved":
+    BEST_MODEL_PATH = CHECKPOINT_DIR / "improved_unet_best.pth"
+    HISTORY_PATH = CHECKPOINT_DIR / "improved_training_history.csv"
+else:
+    BEST_MODEL_PATH = CHECKPOINT_DIR / "baseline_unet_best.pth"
+    HISTORY_PATH = CHECKPOINT_DIR / "baseline_training_history.csv"
+
 
 def set_seed(seed=SEED):
     """Enforce reproducibilityacross numpy, random, and PyTorch backends.
@@ -233,7 +241,7 @@ def save_history(history, csv_path=HISTORY_PATH):
 
 def main(): 
     print("=" * 65) 
-    print("STARTING TRAINING: BASELINE 2D U-NET (HipMRI)") 
+    print(f"STARTING TRAINING: {MODEL_NAME.upper()} 2D U-NET (HipMRI)") 
     print("=" * 65)
 
     # Reproducibility 
@@ -257,12 +265,21 @@ def main():
         num_workers=NUM_WORKERS
     )
 
-    # Initialize Model from modules.py
-    model = Baseline_UNet(
-        in_channels=1, 
-        num_classes=NUM_CLASSES,
-        base_filters=16
-    ).to(device)
+    # Initialize Models from modules.py
+    if MODEL_NAME == "improved":
+        print("\n[Architecure] Instantiating Improved 2D U-Net (residualBlocks)...")
+        model = Improved_UNet(
+            in_channels=1, 
+            num_classes=NUM_CLASSES,
+            base_filters=16
+        ).to(device)
+    else:
+        print("\n[Architecure] Instantiating Baseline 2D U-Net...")
+        model = Baseline_UNet(
+            in_channels=1, 
+            num_classes=NUM_CLASSES,
+            base_filters=16
+        ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model Parameters: {total_params:,}")

@@ -5,20 +5,30 @@ from matplotlib.colors import ListedColormap
 import torch 
 
 from dataset import get_dataloaders, NUM_CLASSES, TARGET_PROSTATE_LABEL
-from modules import Baseline_UNet
+from modules import Baseline_UNet, Improved_UNet
 
 """
 Functions:
-1. Loads trained weights from checkpoints/baseline_unet_best.pth
+1. Loads trained weights from the checkpoint for the selected model.
 2. computes oficial Test Dice Similarity Coefficients (DSC) across all 6 classes
 3. Generates qualitative 3-panel comparison figures (MRI Slice | Ground Truth | prediction) 
    and saves then to figures.
 """
+# Select model to evaluate: "baseline" or "improved" 
+MODEL_NAME = "improved"
 
 # Configurations
 PROJECT_DIR = Path(__file__).resolve().parent
-CHECKPOINT_PATH = PROJECT_DIR / "checkpoints" / "baseline_unet_best.pth"
 FIGURES_DIR = PROJECT_DIR / "figures"
+
+if MODEL_NAME == "improved":
+    CHECKPOINT_PATH = PROJECT_DIR / "checkpoints" / "improved_unet_best.pth"
+    SAMPLE_PREFIX = "improved_prediction_sample"
+    PLOT_TITLE = "Predicted Segmentation (Improved U-Net)"
+else:
+    CHECKPOINT_PATH = PROJECT_DIR / "checkpoints" / "baseline_unet_best.pth"
+    SAMPLE_PREFIX = "baseline_prediction_sample"
+    PLOT_TITLE = "Predicted Segmentation (baseline U-Net)"
 
 BATCH_SIZE = 16 
 NUM_WORKERS = 1 
@@ -124,13 +134,13 @@ def save_qualitative_predictions(model, test_loader, device, num_samples=5, out_
             axes[1].set_title("Ground Truth Segmentation", fontsize=12, fontweight="bold") 
             axes[1].axis("off")
 
-            # Panel 3: Baseline U-Net Prediction 
+            # Panel 3: Model Prediction 
             axes[2].imshow(pred_mask, cmap=SEG_CMAP, vmin=0, vmax=NUM_CLASSES - 1, aspect="auto") 
-            axes[2].set_title("Predicted Segmentation (Baseline U-Net)", fontsize=12, fontweight="bold") 
+            axes[2].set_title(PLOT_TITLE, fontsize=12, fontweight="bold") 
             axes[2].axis("off")
 
             plt.tight_layout() 
-            output_file = out_dir / f"baseline_prediction_sample_{saved_count + 1}.png" 
+            output_file = out_dir / f"{SAMPLE_PREFIX}_{saved_count + 1}.png" 
             plt.savefig(output_file, dpi=200, bbox_inches="tight") 
             plt.close(fig)
 
@@ -146,7 +156,7 @@ def save_qualitative_predictions(model, test_loader, device, num_samples=5, out_
 
 def main():
     print("=" * 65)
-    print("EVALUATE & INFERENCE: BASELINE 2D U-NET (HipMRI)")
+    print(f"EVALUATE & INFERENCE: {MODEL_NAME.upper()} 2D U-NET (HipMRI)")
     print("=" * 65)
 
     device = torch.device(
@@ -168,11 +178,18 @@ def main():
     )
 
     # Initialize Architecture 
-    model = Baseline_UNet( 
-        in_channels=1, 
-        num_classes=NUM_CLASSES, 
-        base_filters=16 
-    ).to(device)
+    if MODEL_NAME == "improved":
+        model = Improved_UNet(
+            in_channels=1, 
+            num_classes=NUM_CLASSES,
+            base_filters=16
+        ).to(device)
+    else:
+        model = Baseline_UNet(
+            in_channels=1, 
+            num_classes=NUM_CLASSES,
+            base_filters=16
+        ).to(device)
 
     # Load checkpoint 
     print(f"Loading checkpoint weights from: {CHECKPOINT_PATH}") 
