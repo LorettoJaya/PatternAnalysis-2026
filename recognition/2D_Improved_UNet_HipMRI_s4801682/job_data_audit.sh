@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=data_audit
 #SBATCH --partition=comp3710
