@@ -264,7 +264,16 @@ Both models use the same input dimensions $(B, 1, 256, 128)$, output classes (6)
 ### 5.1 Convolutional Building Blocks
 1. **Standard Double-Convolutional Block (`ConvBlock`):**
 The baseline U-Net uses a `ConvBlock` to extract and refine features at each resolution level. Each block contains two consecutive convolutional layers, each followed by batch normalisation and a ReLU activation: 
-$$\text{Input} \longrightarrow \text{Conv2d (3 \times 3)} \longrightarrow \text{BatchNorm2d} \longrightarrow \text{ReLU} \longrightarrow \text{Conv2d (3 \times 3)} \longrightarrow \text{BatchNorm2d} \longrightarrow \text{ReLU} \longrightarrow \text{Output}$$
+$$
+\text{Input}
+\longrightarrow \text{Conv2d } (3 \times 3)
+\longrightarrow \text{BatchNorm2d}
+\longrightarrow \text{ReLU}
+\longrightarrow \text{Conv2d } (3 \times 3)
+\longrightarrow \text{BatchNorm2d}
+\longrightarrow \text{ReLU}
+\longrightarrow \text{Output}
+$$
 
 **The main components are:**
 - **$3 \times 3$ convolutions:** Learn local spatial features from the input feature maps.
